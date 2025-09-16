@@ -2,3 +2,6 @@
 .claude/settings.local.json
 .idea/
 app/__pycache__/
+app/generated_images/
+app/quotes.db
+app/*.log

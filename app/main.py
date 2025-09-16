@@ -14,7 +14,19 @@ from openai import OpenAI
 import logging
 import random
 
-logging.basicConfig(level=logging.INFO)
+from app.image_prompt_generator import build_image_prompt_instructions
+from app.database import QuoteDatabase
+from app.filesystem import ImageStorage
+
+# Configure logging to file and console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env in the project root (if present)
@@ -26,6 +38,10 @@ load_dotenv()
 
 
 app = FastAPI(title="Daily Business Quote Image")
+
+# Initialize database and image storage
+db = QuoteDatabase()
+image_storage = ImageStorage()
 
 
 class QuoteRequest(BaseModel):
@@ -49,6 +65,12 @@ def generate_quote_text(seed: Optional[str] = None) -> str:
     user_prompt = "Create one short (max 20 words) business advice quote"
     if seed:
         user_prompt += f" inspired by: {seed}"
+    
+    # Get recent quotes to avoid repetition
+    recent_quotes = db.get_recent_quotes(20)
+    if recent_quotes:
+        recent_quote_texts = [q['quote_text'] for q in recent_quotes]
+        user_prompt += f"\n\nDO NOT create anything similar to these recent quotes: {', '.join(recent_quote_texts[:10])}"
 
     try:
         client = OpenAI(api_key=key)
@@ -58,7 +80,7 @@ def generate_quote_text(seed: Optional[str] = None) -> str:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.9
+            temperature=1.2
         )
 
         # New SDK returns choices with message content
@@ -79,35 +101,7 @@ def generate_image_prompt(quote_text: Optional[str] = None) -> str:
         You are a marketing wizard and will make images that are shared everywhere"""
     )
 
-    image_prompt_template = """Task: Turn the following business quote into a single compelling BACKGROUND IMAGE prompt for a viral quote card.
-
-    QUOTE: "{quote}"
-
-    Requirements:
-    - Audience: business leaders, founders, sales/ops/marketing pros.
-    - Purpose: background image behind the quote (do NOT include any text in the image).
-    - Overall vibe: energetic, aspirational, cinematic, high-contrast, viral-worthy.
-    - People: diverse, attractive professionals; confident and happy; stylish but realistic.
-    - Context: choose ONE scene that best amplifies the quote’s emotion and intent:
-      A) modern office collaboration (brainstorming, whiteboard, handshake, celebration),
-      B) inspirational outdoor adventure with a subtle business tie-in (hiking ridge, mountain summit, sailing, water-skiing, sunrise rooftop),
-      C) networking/wins (team toast at golden hour, rooftop chat, coffee meetup, launch moment).
-    - Composition: reserve clean negative space (preferably the top third) with soft background/bokeh for text overlay; avoid busy patterns behind text area.
-    - Lighting & color: natural light (golden hour or bright daylight), vibrant-yet-realistic colors, cinematic depth; tasteful lens flare or shallow depth of field is OK.
-    - Camera & framing: describe lens/angle to support drama (e.g., wide-angle establishing shot, medium shot with shallow DOF, low-angle for heroism).
-    - Wardrobe & props: smart-casual or business attire; subtle tech/office elements (laptop, notebook) are fine, but do not over-clutter.
-    - Randomize per run: location, time of day, angle, group size (1–5), wardrobe, ethnicity/gender mix, background details.
-    - Aspect ratio: 4:5 or 1:1; ensure subjects aren’t cropped; leave breathing room for overlaid quote text.
-    - Safety/brand: no visible logos/brands, no famous landmarks that imply endorsement, no risky behavior beyond normal outdoor activities, no politics/medical themes.
-    - Output: Return ONLY the final image prompt text, followed by a "Negative prompt:" line.
-
-    Structure your output like this (no extra commentary) and keep the prompt short an succinct while still maintaining it's descriptive qualities:
-    [Main descriptive prompt capturing the chosen scene, people, mood, lighting, lens, composition, and negative space for text overlay. Finish with aspect ratio instruction.]
-    Negative prompt: text, captions, subtitles, watermarks, logos, brand names, nudity, violence, gore, weapons, unsafe stunts, low quality, over-sharpening, extra fingers, distorted faces, deformed hands, duplicate people, heavy JPEG artifacts
-
-    Important: The prompt must strongly reflect the meaning and emotion of the QUOTE while staying visually exciting and shareable."""
-
-    final_instructions = image_prompt_template.format(quote=quote_text)
+    final_instructions = build_image_prompt_instructions(quote=quote_text)
 
     try:
         client = OpenAI(api_key=key)
@@ -117,18 +111,21 @@ def generate_image_prompt(quote_text: Optional[str] = None) -> str:
                 {"role": "system", "content": system},
                 {"role": "user", "content": final_instructions},
             ],
-            temperature=1.2,
-            top_p=0.01
+            temperature=0.6
         )
 
         # New SDK returns choices with message content
-        quote = resp.choices[0].message.content.strip()
+        generated_prompt = resp.choices[0].message.content.strip()
 
         # Keep only first line
-        quote = quote.splitlines()[0]
-        return quote
+        generated_prompt = generated_prompt.splitlines()[0]
+        
+        # Log the generated prompt
+        logger.info("Generated image prompt: %s", generated_prompt)
+        
+        return generated_prompt
     except Exception as e:
-        raise RuntimeError(f"OpenAI quote generation failed: {e}")
+        raise RuntimeError(f"OpenAI image prompt generation failed: {e}")
 
 
 
@@ -381,7 +378,7 @@ def quote_image(req: QuoteRequest):
 
     try:
         # Use Google Imagen for background generation
-        img_bytes = generate_image_via_imagen(img_prompt)
+        raw_img_bytes = generate_image_via_imagen(img_prompt)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -389,11 +386,58 @@ def quote_image(req: QuoteRequest):
         # Use a modest-but-larger text scale so the quote is more prominent.
         # This default produces font sizes comfortably above the 18px floor
         # for common image widths.
-        final_bytes = overlay_text_on_image(img_bytes, quote, text_scale=0.03)
+        overlay_img_bytes = overlay_text_on_image(raw_img_bytes, quote, text_scale=0.03)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to overlay text: {e}")
 
-    return StreamingResponse(io.BytesIO(final_bytes), media_type="image/png")
+    try:
+        # First insert the quote to get an ID, then generate filenames
+        quote_id = db.insert_quote(
+            quote_text=quote,
+            raw_image_filename="temp",  # Temporary placeholder
+            overlay_image_filename="temp",  # Temporary placeholder
+            seed=req.seed,
+            image_prompt=img_prompt
+        )
+        
+        # Generate proper filenames using the quote ID
+        raw_filename, overlay_filename = image_storage.generate_filenames(quote_id)
+        
+        # Update the database with the actual filenames
+        db.update_filenames(quote_id, raw_filename, overlay_filename)
+        
+        # Save images to filesystem
+        image_storage.save_images(raw_img_bytes, overlay_img_bytes, raw_filename, overlay_filename)
+        
+        logger.info(f"Saved quote {quote_id}: '{quote}' with images {raw_filename}, {overlay_filename}")
+        
+    except Exception as e:
+        logger.exception("Failed to save quote and images: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to save quote data: {e}")
+
+    return StreamingResponse(io.BytesIO(overlay_img_bytes), media_type="image/png")
+
+
+@app.get("/quotes")
+def list_quotes():
+    """List all saved quotes with their metadata."""
+    try:
+        quotes = db.get_all_quotes()
+        return {"quotes": quotes}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve quotes: {e}")
+
+
+@app.get("/quotes/{quote_id}")
+def get_quote(quote_id: int):
+    """Get a specific quote by ID."""
+    try:
+        quote = db.get_quote_by_id(quote_id)
+        if not quote:
+            raise HTTPException(status_code=404, detail="Quote not found")
+        return quote
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve quote: {e}")
 
 
 if __name__ == "__main__":
