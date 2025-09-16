@@ -1,0 +1,4 @@
+.env
+.claude/settings.local.json
+idea/
+app/_pycache/
