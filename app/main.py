@@ -117,7 +117,8 @@ def generate_image_prompt(quote_text: Optional[str] = None) -> str:
                 {"role": "system", "content": system},
                 {"role": "user", "content": final_instructions},
             ],
-            temperature=0.99
+            temperature=1.2,
+            top_p=0.01
         )
 
         # New SDK returns choices with message content
