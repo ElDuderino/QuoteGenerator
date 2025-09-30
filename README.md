@@ -30,6 +30,11 @@ An AI-powered business quote generator that creates viral-ready motivational ima
    pip install -r requirements.txt
    ```
 
+   **Note on bcrypt compatibility:** This project uses `passlib` 1.7.4 for password hashing, which requires `bcrypt==4.0.1`. If you encounter errors like `AttributeError: module 'bcrypt' has no attribute '__about__'` or `ValueError: password cannot be longer than 72 bytes`, ensure you have the correct bcrypt version:
+   ```bash
+   pip install bcrypt==4.0.1
+   ```
+
 3. **Set up environment variables:**
    
    Create a `.env` file in the project root:
@@ -177,12 +182,19 @@ The system includes robust text overlay with:
 3. **"google-genai package is required"**
    - Run `pip install -r requirements.txt` to install dependencies
 
-4. **Server won't start**
+4. **bcrypt/passlib compatibility errors**
+   - **Error**: `AttributeError: module 'bcrypt' has no attribute '__about__'`
+   - **Error**: `ValueError: password cannot be longer than 72 bytes`
+   - **Cause**: `passlib` 1.7.4 is not fully compatible with `bcrypt` 5.x
+   - **Solution**: Downgrade bcrypt to 4.0.1: `pip install bcrypt==4.0.1`
+   - **Note**: Bcrypt has a built-in 72-byte password length limit. The application automatically truncates passwords at 72 bytes during both hashing and verification to comply with this limitation. This is secure and standard practice.
+
+5. **Server won't start**
    - Check that port 8101 is available
    - Verify all dependencies are installed
    - Check the console output for detailed error messages
 
-5. **Poor text quality**
+6. **Poor text quality**
    - Install TrueType fonts on your system (see Installation section)
    - The system will fall back to bitmap fonts if no TrueType fonts are found
 

@@ -3,7 +3,7 @@ import io
 import textwrap
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ import random
 from app.image_prompt_generator import build_image_prompt_instructions
 from app.database import QuoteDatabase
 from app.filesystem import ImageStorage
+from app.auth_funcs import router as auth_router, User, get_current_active_user
 
 # Configure logging to file and console
 logging.basicConfig(
@@ -38,6 +39,9 @@ load_dotenv()
 
 
 app = FastAPI(title="Daily Business Quote Image")
+
+# Include auth router
+app.include_router(auth_router)
 
 # Initialize database and image storage
 db = QuoteDatabase()
@@ -365,7 +369,7 @@ def overlay_text_on_image(image_bytes: bytes, text: str, text_scale: float = 0.0
 
 
 @app.post("/quote-image")
-def quote_image(req: QuoteRequest):
+def quote_image(req: QuoteRequest, current_user: User = Depends(get_current_active_user)):
     try:
         quote = generate_quote_text(req.seed)
     except Exception as e:
@@ -419,7 +423,7 @@ def quote_image(req: QuoteRequest):
 
 
 @app.get("/quotes")
-def list_quotes():
+def list_quotes(current_user: User = Depends(get_current_active_user)):
     """List all saved quotes with their metadata."""
     try:
         quotes = db.get_all_quotes()
@@ -429,7 +433,7 @@ def list_quotes():
 
 
 @app.get("/quotes/{quote_id}")
-def get_quote(quote_id: int):
+def get_quote(quote_id: int, current_user: User = Depends(get_current_active_user)):
     """Get a specific quote by ID."""
     try:
         quote = db.get_quote_by_id(quote_id)
