@@ -4,16 +4,17 @@ saves the returned image to a file and attempts to open it with the default
 image viewer (via Pillow.Image.show()).
 
 Usage:
-  python tests/fetch_and_show.py [username] [password]
+  python tests/fetch_and_show.py
 
 Notes:
  - Assumes the server is already running on http://127.0.0.1:8101
- - Defaults to username=demo, password=democlient321 if not provided
+ - Reads credentials from tests/config.cfg file
  - This is intended as a convenience developer test; adapt as needed.
 """
 import os
 import sys
 import tempfile
+import configparser
 from pathlib import Path
 
 import requests
@@ -119,10 +120,46 @@ def fetch_image_and_show(access_token: str):
         return 1
 
 
+def load_credentials_from_config():
+    """
+    Load username and password from tests/config.cfg file.
+
+    Returns:
+        tuple: (username, password)
+
+    Raises:
+        SystemExit: If config file not found or credentials not present
+    """
+    config_path = Path("config.cfg")
+
+    if not config_path.exists():
+        print(f"Error: Config file not found at {config_path}")
+        sys.exit(1)
+
+    try:
+        config = configparser.ConfigParser()
+        config.read(config_path)
+
+        if "CREDENTIALS" not in config:
+            print("Error: [CREDENTIALS] section not found in config.cfg")
+            sys.exit(1)
+
+        username = config["CREDENTIALS"].get("username")
+        password = config["CREDENTIALS"].get("password")
+
+        if not username or not password:
+            print("Error: username and password must be set in [CREDENTIALS] section of config.cfg")
+            sys.exit(1)
+
+        return username, password
+    except Exception as e:
+        print(f"Error: Failed to read config file: {e}")
+        sys.exit(1)
+
+
 def main():
-    # Get credentials from command line args or use defaults
-    username = sys.argv[1] if len(sys.argv) > 1 else os.getenv("API_USERNAME", "demo")
-    password = sys.argv[2] if len(sys.argv) > 2 else os.getenv("API_PASSWORD", "password")
+    # Get credentials from config file
+    username, password = load_credentials_from_config()
 
     # Authenticate and get token
     access_token = get_access_token(username, password)

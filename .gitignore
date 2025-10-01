@@ -7,3 +7,4 @@ app/quotes.db
 app/users.db
 app/*.log
 app/config.cfg
+tests/config.cfg
